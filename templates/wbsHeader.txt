@@ -1,0 +1,19 @@
+@startwbs
+
+skinparam backgroundColor white
+
+<style>
+' this time, scoping to wbsDiagram
+wbsDiagram {
+  
+  Linecolor black
+  BackGroundColor white
+  
+   arrow {
+	' note that Connectors are actually "Arrows"; this may change in the future
+	' so this means all Connectors and Arrows are now going to be gray
+	LineColor gray
+  }
+  
+}
+</style>

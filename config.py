@@ -1,0 +1,5 @@
+server = "https://dev.azure.com"
+organization = "/xxx/"
+username = "xxx@xxx.com"
+PAT = "xxx"
+project = "xxx"
