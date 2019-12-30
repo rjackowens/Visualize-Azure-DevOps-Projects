@@ -1,15 +1,16 @@
-import requests
-import urllib3
 import logging
 import re
 import subprocess
 import json
 import base64
+import requests
+import urllib3
 from itertools import zip_longest
 from datetime import datetime
-from config import server, organization, username, PAT, project
-
-outputFile = (str(project) + ".wsd")
+from pathlib import Path
+from azure.devops.connection import Connection
+from msrest.authentication import BasicAuthentication
+from config import organization, organization_url, username, PAT
 
 now = datetime.now()
 log_date = now.strftime("%m%d%Y")
@@ -21,15 +22,21 @@ logging.basicConfig(
     datefmt='%I:%M:%S'
     )
 
-log = logging.getLogger()
+log = logging.getLogger(__name__)
 log.info("START")
+
+try:
+    Path(".\\logs").mkdir(exist_ok=True)
+    Path(".\\models").mkdir(exist_ok=True)
+    assert Path(".\\templates\\wbsHeader.txt").exists()
+except (IOError, AssertionError) as e:
+    log.error(e, exc_info=True)
+    raise
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-
 def createUrl(*args):
-    base = server + organization
-    return base + "".join(args)
+    return organization_url + "".join(args)
 
 def getRequest(*args):
     url = createUrl(*args)
@@ -41,7 +48,7 @@ def postRequest(*args, **kwargs):
     response = requests.post(url, auth=(username, PAT), verify=False, **kwargs)
 
     if response.status_code == 409:
-        log.info(f"Wiki for {project} already exists")
+        log.warning(f"Wiki for {project} already exists")
 
     return response.json()
 
@@ -54,39 +61,6 @@ def deleteRequest(*args, **kwargs):
     url = createUrl(*args)
     response = requests.delete(url, auth=(username, PAT), verify=False, **kwargs)
     return response.json()
-
-
-all_repos = getRequest(project, "/_apis/git/repositories")
-
-list_of_repos = []
-for repo in all_repos["value"] or []:
-    list_of_repos.append(repo["name"])
-
-buildDefinitions = getRequest(project, "/_apis/build/definitions/")
-
-build_definition_IDs = []
-build_pipeline_names = []
-for build in buildDefinitions["value"]:
-    if build["queueStatus"] == "enabled":  # Skip over disabled builds
-        build_definition_IDs.append(build["id"])
-        build_pipeline_names.append(build["name"])
-
-associated_build_repos = []  # Repos containing an associated build pipeline
-for ID in build_definition_IDs:
-    buildDefinition = getRequest(project, "/_apis/build/definitions/", str(ID))
-    log.debug(buildDefinition["repository"].get("name"), "has pipeline")
-    try:
-        associated_build_repos.append(buildDefinition["repository"].get("name"))
-    except KeyError as e:
-        log.error(e)
-
-with open(".\\templates\\wbsHeader.txt") as file:
-    wbsHeader = file.read()
-log.info("Opened wbsHeader.txt template")
-
-wbsFooter = "@endwbs"
-
-org = "+ ORGANIZATION: " + re.sub('[/]', '', organization)
 
 def writeProject(project):
     _project = f"++ PROJECT: {project}"
@@ -105,8 +79,9 @@ def writePipeline(name):
 
 
 class PlantUML():
-    def __init__(self, fileName):
+    def __init__(self, fileName, project):
         self.fileName = ".\\models\\" + fileName
+        self.project = project
 
     def eraseFile(self):
         open(self.fileName, "w").close()
@@ -121,10 +96,11 @@ class PlantUML():
         log.info(f"Generating {self.fileName} file")
 
     def generatePlantUML(self):
+        """Outputs file as {project}.png to models"""
         self.eraseFile()
         self.writeToFile(wbsHeader)
         self.writeToFile(org)
-        self.writeToFile(writeProject(project))
+        self.writeToFile(writeProject(self.project))
 
         for repo, name in zip_longest(list_of_repos, build_pipeline_names):
             self.writeToFile(writeRepo(repo))
@@ -136,13 +112,8 @@ class PlantUML():
         self.generateModelFile()
         log.info("Generated image model to local folder")
 
-
-model = PlantUML(outputFile)
-
-model.generatePlantUML() # Outputs file as {project}.png to .\models
-
-# Create Project Wiki
 def createWiki(_project):
+    """Creates New Wiki Page With Inline Image"""
     wiki_name = {
         "name": f"{_project}.wiki"
     }
@@ -151,60 +122,44 @@ def createWiki(_project):
         'Content-Type': 'application/json'
     }
 
-    print(postRequest(_project, "/_apis/wiki/wikis", "?api-version=5.1-preview.1", data=json.dumps(wiki_name), headers=wiki_headers))
-    log.info("Created project wiki")
+    log.debug(postRequest(_project, "/_apis/wiki/wikis", "?api-version=5.1-preview.1", data=json.dumps(wiki_name), headers=wiki_headers))
+    log.info(f"Created {_project} project wiki")
 
-
-createWiki(project)
-
-
-# Convert Image Model to Base64
 def convertImageBase64(_imageModel):
     with open (f".\\models\\{_imageModel}.png", "rb") as file:
         _image = base64.b64encode(file.read())
         return _image
-    log.info("Converted image model to base64")
-
-
-base64_image = convertImageBase64(project)
+    log.info(f"Converted {_imageModel} image model to base64")
 
 # Creates Date Suffix in Format of -HourMinute-Month-Day
 unique_date = now.strftime("-%H%M-%m-%d")
 
-# Attaching Image to Wiki Attachments (https://dev.azure.com/{organization}/{project}/_git/{project}.wiki?version=GBwikiMaster)
 def attachImageToWiki(_project):
+    """Attaches Image to Wiki Attachments (https://dev.azure.com/{organization}/{project}/_git/{project}.wiki?version=GBwikiMaster)"""
     image_content_type = {
         'Content-Type': 'application/octet-stream'
     }
 
-    print(
+    log.debug(
         putRequest(
             _project,
             "/_apis/wiki/wikis/",
             f"{_project}.wiki/attachments",
-            f"?name={project}{unique_date}.png",
+            f"?name={_project}{unique_date}.png",
             "&api-version=5.1",
             data=base64_image,
             headers=image_content_type
             )
         )
-    log.info("Attached Image to Wiki Attachments")
+    log.info(f"Attached Image to {_project} Wiki Attachments")
 
+def deleteWikiPage(_project):
+    deleteRequest(_project, "/_apis/wiki/wikis/", f"{_project}.wiki/pages", "?path=Project-Structure&api-version=5.1")
+    log.info(f"Deleted existing {_project} wiki page")
 
-attachImageToWiki(project)
-
-# Deleting Existing Wiki Page
-def deleteWikiPage():
-    deleteRequest(project, "/_apis/wiki/wikis/", f"{project}.wiki/pages", "?path=Project-Structure&api-version=5.1")
-    log.info("Deleted existing wiki page")
-
-
-deleteWikiPage()
-
-# Creating New Wiki Page With Inline Image 
 def createWikiPage(_project):
     image_path = {
-        "content": f"![{project}{unique_date}.png](/.attachments/{project}{unique_date}.png)"
+        "content": f"![{_project}{unique_date}.png](/.attachments/{_project}{unique_date}.png)"
     }
 
     json_content_type = {
@@ -212,7 +167,7 @@ def createWikiPage(_project):
         'Accept': 'text/plain'
     }
 
-    print(
+    log.debug(
         putRequest(
             _project,
             "/_apis/wiki/wikis/",
@@ -222,9 +177,80 @@ def createWikiPage(_project):
             headers=json_content_type
         )
     )
-    log.info("Created new wiki page")
+    log.info(f"Created new {_project} wiki page")
 
 
-createWikiPage(project)
+with open(".\\templates\\wbsHeader.txt") as file:
+    wbsHeader = file.read()
+log.info("Opened wbsHeader.txt template")
+
+wbsFooter = "@endwbs"
+
+org = "+ ORGANIZATION: " + re.sub('[/]', '', organization)
+
+# Creating Python Client Library Connection
+credentials = BasicAuthentication('', PAT)
+connection = Connection(base_url=organization_url, creds=credentials)
+
+# Get a client (the "core" client provides access to projects, teams, etc)
+core_client = connection.clients.get_core_client()
+
+# Getting All Projects
+get_projects_response = core_client.get_projects()
+all_projects = []
+# Get the first page of projects
+while get_projects_response is not None:
+    for project in get_projects_response.value:
+        log.info(f"Getting project {project.name}")
+        all_projects.append(project.name)
+    if get_projects_response.continuation_token is not None and get_projects_response.continuation_token != "":
+        # Get the next page of projects
+        get_projects_response = core_client.get_projects(continuation_token=get_projects_response.continuation_token)
+    else:
+        # All projects have been retrieved
+        assert get_projects_response.continuation_token is None
+        get_projects_response = None
+
+for project in all_projects:
+    outputFile = (str(project) + ".wsd")
+
+    all_repos = getRequest(project, "/_apis/git/repositories")
+
+    list_of_repos = []
+    for repo in all_repos["value"] or []:
+        list_of_repos.append(repo["name"])
+
+    buildDefinitions = getRequest(project, "/_apis/build/definitions/")
+
+    build_definition_IDs = []
+    build_pipeline_names = []
+    for build in buildDefinitions["value"]:
+        if build["queueStatus"] == "enabled":  # Skip over disabled builds
+            build_definition_IDs.append(build["id"])
+            build_pipeline_names.append(build["name"])
+
+    associated_build_repos = []  # Repos containing an associated build pipeline
+    for ID in build_definition_IDs:
+        buildDefinition = getRequest(project, "/_apis/build/definitions/", str(ID))
+        log.debug(buildDefinition["repository"].get("name"), "has pipeline")
+        try:
+            associated_build_repos.append(buildDefinition["repository"].get("name"))
+        except KeyError as e:
+            log.error(e, exc_info=True)
+            raise
+
+    model = PlantUML(outputFile, project)
+
+    model.generatePlantUML()
+
+    createWiki(project)
+
+    base64_image = convertImageBase64(project)
+
+    attachImageToWiki(project)
+
+    deleteWikiPage(project)
+ 
+    createWikiPage(project)
 
 log.info("EXIT 0")
