@@ -1,10 +1,10 @@
 # Summary
-Creates PlantUML WBS model of Azure DevOps Project repositories and associated pipelines and uploads the model image to the project Wiki.
+Creates PlantUML WBS model of all Azure DevOps Project repositories and associated pipelines and uploads the model image to the project Wiki.
 
-# Project Requirements
+# Requirements
 Install contents of `requirements.txt` via pip.
 
-Enter values for `server`, `organization`, `username`, `PAT`, and `project` in `config.py`.
+Enter values for `server`, `organization`, `username`, and `PAT` in `config.py`.
 
 # Azure DevOps Requirements
 1. PAT must have access to Read/Write/Manage Build, Release, Code, and Wiki.
@@ -14,6 +14,8 @@ Enter values for `server`, `organization`, `username`, `PAT`, and `project` in `
 3. Pipeline names must begin with the repository it is associated with.
 
 # Usage
-WBS model header containing theme settings is stored in `.\templates` .
+Run `main.py` to generate models for all projects.
 
-Model files are stored in `.\models`.
+WBS header containing customizable theme settings is stored in `.\templates` .
+
+Model files are stored locally in `.\models`.
