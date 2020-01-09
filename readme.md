@@ -19,3 +19,6 @@ Run `main.py` to generate models for all projects.
 WBS header containing customizable theme settings is stored in `.\templates` .
 
 Model files are stored locally in `.\models`.
+
+# Example Output:
+![Image alt text](https://raw.githubusercontent.com/rjackowens/Visualize-Azure-DevOps-Projects/master/Example_Model.png)
