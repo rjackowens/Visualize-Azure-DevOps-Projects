@@ -29,37 +29,36 @@ try:
     Path(".\\logs").mkdir(exist_ok=True)
     Path(".\\models").mkdir(exist_ok=True)
     assert Path(".\\templates\\wbsHeader.txt").exists()
+    log.debug("Folder check passed")
 except (IOError, AssertionError) as e:
     log.error(e, exc_info=True)
     raise
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def createUrl(*args):
-    return organization_url + "".join(args)
+def makeRequest(*args, **kwargs):
+    """Sends HTTP requests to Azure DevOps API"""
+    url = organization_url + "".join(args)
 
-def getRequest(*args):
-    url = createUrl(*args)
-    response = requests.get(url, auth=(username, PAT), verify=False)
-    return response.json()
+    if kwargs.get("request_method") == "get":
+        handler = requests.get
+    elif kwargs.get("request_method") == "post":
+        handler = requests.post
+    elif kwargs.get("request_method") == "put":
+        handler = requests.put
+    elif kwargs.get("request_method") == "delete":
+        handler = requests.delete
+    else:
+        log.error("No requests method selected")
+        raise LookupError
 
-def postRequest(*args, **kwargs):
-    url = createUrl(*args)
-    response = requests.post(url, auth=(username, PAT), verify=False, **kwargs)
-
-    if response.status_code == 409:
-        log.warning(f"Wiki for {project} already exists")
-
-    return response.json()
-
-def putRequest(*args, **kwargs):
-    url = createUrl(*args)
-    response = requests.put(url, auth=(username, PAT), verify=False, **kwargs)
-    return response.json()
-
-def deleteRequest(*args, **kwargs):
-    url = createUrl(*args)
-    response = requests.delete(url, auth=(username, PAT), verify=False, **kwargs)
+    try:
+        response = handler(url, auth=(username, PAT), verify=False, data=kwargs.get("data"), headers=kwargs.get("headers"))
+        if response.status_code == 409:
+            log.warning(f"Wiki for {project} already exists")
+    except requests.exceptions.HTTPError as e:
+        log.error(f"HTTP exception {e} has occurred")
+        raise
     return response.json()
 
 def writeProject(project):
@@ -122,7 +121,16 @@ def createWiki(_project):
         'Content-Type': 'application/json'
     }
 
-    log.debug(postRequest(_project, "/_apis/wiki/wikis", "?api-version=5.1-preview.1", data=json.dumps(wiki_name), headers=wiki_headers))
+    log.debug(
+        makeRequest(
+            _project,
+            "/_apis/wiki/wikis",
+            "?api-version=5.1-preview.1",
+            request_method="post",
+            data=json.dumps(wiki_name),
+            headers=wiki_headers
+            )
+        )
     log.info(f"Created {_project} project wiki")
 
 def convertImageBase64(_imageModel):
@@ -141,12 +149,13 @@ def attachImageToWiki(_project):
     }
 
     log.debug(
-        putRequest(
+        makeRequest(
             _project,
             "/_apis/wiki/wikis/",
             f"{_project}.wiki/attachments",
             f"?name={_project}{unique_date}.png",
             "&api-version=5.1",
+            request_method="put",
             data=base64_image,
             headers=image_content_type
             )
@@ -154,7 +163,7 @@ def attachImageToWiki(_project):
     log.info(f"Attached Image to {_project} Wiki Attachments")
 
 def deleteWikiPage(_project):
-    deleteRequest(_project, "/_apis/wiki/wikis/", f"{_project}.wiki/pages", "?path=Project-Structure&api-version=5.1")
+    makeRequest(_project, "/_apis/wiki/wikis/", f"{_project}.wiki/pages", "?path=Project-Structure&api-version=5.1", request_method="delete")
     log.info(f"Deleted existing {_project} wiki page")
 
 def createWikiPage(_project):
@@ -168,11 +177,12 @@ def createWikiPage(_project):
     }
 
     log.debug(
-        putRequest(
+        makeRequest(
             _project,
             "/_apis/wiki/wikis/",
             f"{_project}.wiki/pages",
             "?path=Project-Structure&api-version=5.1",
+            request_method="put",
             data=json.dumps(image_path),
             headers=json_content_type
         )
@@ -214,13 +224,13 @@ while get_projects_response is not None:
 for project in all_projects:
     outputFile = (str(project) + ".wsd")
 
-    all_repos = getRequest(project, "/_apis/git/repositories")
+    all_repos = makeRequest(project, "/_apis/git/repositories", request_method="get")
 
     list_of_repos = []
     for repo in all_repos["value"] or []:
         list_of_repos.append(repo["name"])
 
-    buildDefinitions = getRequest(project, "/_apis/build/definitions/")
+    buildDefinitions = makeRequest(project, "/_apis/build/definitions/", request_method="get")
 
     build_definition_IDs = []
     build_pipeline_names = []
@@ -231,7 +241,7 @@ for project in all_projects:
 
     associated_build_repos = []  # Repos containing an associated build pipeline
     for ID in build_definition_IDs:
-        buildDefinition = getRequest(project, "/_apis/build/definitions/", str(ID))
+        buildDefinition = makeRequest(project, "/_apis/build/definitions/", str(ID), request_method="get")
         log.debug(buildDefinition["repository"].get("name"), "has pipeline")
         try:
             associated_build_repos.append(buildDefinition["repository"].get("name"))
