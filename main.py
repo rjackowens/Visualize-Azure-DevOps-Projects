@@ -5,7 +5,6 @@ import json
 import base64
 import requests
 import urllib3
-from itertools import zip_longest
 from datetime import datetime
 from pathlib import Path
 from azure.devops.connection import Connection
@@ -101,10 +100,13 @@ class PlantUML():
         self.writeToFile(org)
         self.writeToFile(writeProject(self.project))
 
-        for repo, name in zip_longest(list_of_repos, build_pipeline_names):
+        for repo in list_of_repos:
             self.writeToFile(writeRepo(repo))
-            if repo in associated_build_repos:
-                self.writeToFile(writePipeline(name))
+            for group in associated_build_repos:
+                associated_repos = group.get("associated_repo")
+                associated_builds = group.get("associated_build")
+                if repo in associated_repos:
+                    self.writeToFile(writePipeline(associated_builds))
         self.writeToFile(wbsFooter)
 
         # Writing Image to File
@@ -244,7 +246,11 @@ for project in all_projects:
         buildDefinition = makeRequest(project, "/_apis/build/definitions/", str(ID), request_method="get")
         log.debug(buildDefinition["repository"].get("name"), "has pipeline")
         try:
-            associated_build_repos.append(buildDefinition["repository"].get("name"))
+            group = {
+                'associated_repo': buildDefinition["repository"].get("name"),
+                'associated_build': buildDefinition.get("name")
+                }
+            associated_build_repos.append(group)
         except KeyError as e:
             log.error(e, exc_info=True)
             raise
