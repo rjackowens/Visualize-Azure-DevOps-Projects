@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from azure.devops.connection import Connection
 from msrest.authentication import BasicAuthentication
-from config import organization, organization_url, username, PAT
+from config import organization, organization_url, release_url, username, PAT
 
 now = datetime.now()
 log_date = now.strftime("%m%d%Y")
@@ -38,6 +38,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 def makeRequest(*args, **kwargs):
     """Sends HTTP requests to Azure DevOps API"""
     url = organization_url + "".join(args)
+    if kwargs.get("is_release"):
+        url = release_url + "".join(args)
 
     if kwargs.get("request_method") == "get":
         handler = requests.get
@@ -70,8 +72,8 @@ def writeRepo(repo):
     log.info(f"Writing repo {repo} to outputFile")
     return _repo
 
-def writePipeline(name):
-    _name = f"++++ PIPELINE: {name}"
+def writePipeline(name, pipeline):
+    _name = f"++++ {pipeline}: {name}"
     log.info(f"Writing pipeline {name} to outputFile")
     return _name
 
@@ -106,7 +108,12 @@ class PlantUML():
                 associated_repos = group.get("associated_repo")
                 associated_builds = group.get("associated_build")
                 if repo in associated_repos:
-                    self.writeToFile(writePipeline(associated_builds))
+                    self.writeToFile(writePipeline(associated_builds, "BUILD"))
+            for group in associated_release_repos:
+                associated_repos = group.get("associated_repo")
+                associated_releases = group.get("associated_release")
+                if repo in associated_repos:
+                    self.writeToFile(writePipeline(associated_releases, "RELEASE"))
         self.writeToFile(wbsFooter)
 
         # Writing Image to File
@@ -235,16 +242,14 @@ for project in all_projects:
     buildDefinitions = makeRequest(project, "/_apis/build/definitions/", request_method="get")
 
     build_definition_IDs = []
-    build_pipeline_names = []
     for build in buildDefinitions["value"]:
         if build["queueStatus"] == "enabled":  # Skip over disabled builds
             build_definition_IDs.append(build["id"])
-            build_pipeline_names.append(build["name"])
 
     associated_build_repos = []  # Repos containing an associated build pipeline
     for ID in build_definition_IDs:
         buildDefinition = makeRequest(project, "/_apis/build/definitions/", str(ID), request_method="get")
-        log.debug(buildDefinition["repository"].get("name"), "has pipeline")
+        log.info(buildDefinition["repository"].get("name"), "has build pipeline")
         try:
             group = {
                 'associated_repo': buildDefinition["repository"].get("name"),
@@ -254,7 +259,29 @@ for project in all_projects:
         except KeyError as e:
             log.error(e, exc_info=True)
             raise
+    
+    releaseDefinitions = makeRequest(project, "/_apis/release/definitions/", request_method="get", is_release=True)
 
+    release_definition_IDs = []
+    release_definition_names = []
+    for release in releaseDefinitions["value"]:
+        release_definition_IDs.append(release["id"])
+        release_definition_names.append(release["name"])
+
+    release_properties = zip(release_definition_IDs, release_definition_names)
+
+    associated_release_repos = [] # Repos containing an associated release pipeline
+    for ID, name in release_properties:
+        releaseDefinition = makeRequest(project, "/_apis/release/definitions/", str(ID), request_method="get", is_release=True)
+        for artifact in releaseDefinition["artifacts"]:
+            if artifact.get("isPrimary"): # Ignores non-primary artifacts
+                log.info(artifact.get("alias"), "has release pipeline")
+                group = {
+                    'associated_repo': artifact.get("alias"),
+                    'associated_release': name
+                    }
+                associated_release_repos.append(group)
+    
     model = PlantUML(outputFile, project)
 
     model.generatePlantUML()
