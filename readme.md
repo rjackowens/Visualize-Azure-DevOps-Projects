@@ -22,3 +22,7 @@ Model files are stored locally in `.\models`.
 
 # Example Output:
 ![Image alt text](https://raw.githubusercontent.com/rjackowens/Visualize-Azure-DevOps-Projects/master/Example_Model.png)
+
+# Known Issues
+**ISSUE**: The wiki attachment creation failed with message : TF402455
+**RESOLUTION**: Navigate to Wiki > Wiki Security. Provide PAT account with policy "Bypass policies when pushing"
